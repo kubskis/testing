@@ -2,18 +2,18 @@
 
 import asyncio
 import logging
-import base64  # <-- Убедитесь, что эта строка есть
+import base64  # <-- Библиотека для кодирования/декодирования
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 
 # --- ДЕКОДИРУЕМ СЕКРЕТНЫЕ ДАННЫЕ ИЗ BASE64 ---
 
-# Здесь "спрятан" ваш токен: 8526419531:AAHEYXxzCgVZ2orcBuoY6Ce-WwT0dWuRwR0
-ENCODED_TOKEN = 'ODUyNjQxOTUzMTpBQUhFWVh6Q2dWWjJvcmNCdW9ZNkNlLVd3VDBkV3VSc1Iw'
+# Здесь "спрятан" ваш НОВЫЙ токен
+ENCODED_TOKEN = 'ODUyNjQxOTUzMTpBQUhlVndiSzJOWnBSN2VmUUFwNThwUlNFUzJ2czNrMU5NQQ=='
 TOKEN = base64.b64decode(ENCODED_TOKEN).decode('utf-8')
 
-# Здесь "спрятаны" ваши ID: 959984030,6769475417,1034179881,7958069580
+# Здесь "спрятаны" ваши ID (остались без изменений)
 ENCODED_ADMIN_IDS = 'OTU5OTg0MDMwLDY3Njk0NzU0MTcsMTAzNDE3OTg4MSw3OTU4MDY5NTgw'
 ADMIN_IDS_STR = base64.b64decode(ENCODED_ADMIN_IDS).decode('utf-8')
 ADMIN_IDS = [int(admin_id.strip()) for admin_id in ADMIN_IDS_STR.split(',')]
