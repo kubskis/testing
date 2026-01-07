@@ -1,111 +1,132 @@
+# main.py
+
 import asyncio
-from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+import logging
+import os  # <-- Импортируем библиотеку для работы с переменными окружения
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 
-TOKEN = "8526419531:AAHEYXxzCgVZ2orcBuoY6Ce-WwT0dWuRwR0"
+# --- БЕРЕМ СЕКРЕТНЫЕ ДАННЫЕ ИЗ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ ---
 
-ADMINS = [
-    959984030,
-    6769475417,
-    1034179881,
-    7958069580
-]
+# Пытаемся получить токен из переменной окружения 'TELEGRAM_TOKEN'
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+if not TOKEN:
+    raise ValueError("Не найдена переменная окружения TELEGRAM_TOKEN. Добавьте ее в настройках хостинга.")
 
-bot = Bot(token=TOKEN)
-dp = Dispatcher()
+# Пытаемся получить ID админов из переменной 'ADMIN_IDS'
+ADMIN_IDS_STR = os.getenv("ADMIN_IDS")
+if not ADMIN_IDS_STR:
+    raise ValueError("Не найдена переменная окружения ADMIN_IDS. Добавьте ее в настройках хостинга.")
 
-waiting_users = {}
-reply_map = {}
-
-
-def main_menu():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📘 FAQ", callback_data="faq")],
-        [InlineKeyboardButton(text="🆘 Поддержка", callback_data="support")]
-    ])
+# Превращаем строку "id1,id2,id3" в список чисел
+try:
+    ADMIN_IDS = [int(admin_id.strip()) for admin_id in ADMIN_IDS_STR.split(',')]
+except ValueError:
+    raise ValueError("Переменная ADMIN_IDS должна быть списком ID, разделенных запятыми (например: 123,456,789)")
 
 
-@dp.message(Command("start"))
-async def start(message: types.Message):
-    await message.answer(
-        "👋 Добро пожаловать в поддержку RP проекта!\n\n"
-        "Выберите нужный раздел 👇",
-        reply_markup=main_menu()
+# --------------------------------------------------------
+
+
+# Настройка логирования для отладки
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+# Текст для раздела FAQ (без изменений)
+FAQ_TEXT = """
+*Часто задаваемые вопросы (FAQ):*
+
+*В: Какой график работы поддержки?*
+*О:* Мы стараемся отвечать как можно скорее, 24/7.
+
+*В: Как мне стать частью РП проекта?*
+*О:* Следите за новостями в нашем основном канале.
+
+*В: Могу ли я предложить свою идею?*
+*О:* Конечно! Напишите администратору, и мы обсудим ваше предложение.
+
+Если у вас остались вопросы, нажмите на кнопку «✍️ Написать поддержке».
+"""
+
+# Все остальные функции (start, button, forward_to_admins, reply_to_user, main)
+# остаются без изменений. Я оставлю их здесь для полноты файла.
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    keyboard = [
+        [InlineKeyboardButton("❓ FAQ", callback_data='faq')],
+        [InlineKeyboardButton("✍️ Написать поддержке", callback_data='support')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        'Добро пожаловать в нашу поддержку!\n\n'
+        'Здесь вы можете найти ответы на частые вопросы или задать свой.',
+        reply_markup=reply_markup
     )
 
+async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    if query.data == 'faq':
+        await query.message.reply_text(FAQ_TEXT, parse_mode='Markdown')
+    elif query.data == 'support':
+        await query.message.reply_text('Напишите ваш вопрос, и я передам его администрации.')
 
-@dp.callback_query(lambda c: c.data == "faq")
-async def faq(callback: types.CallbackQuery):
-    await callback.message.edit_text(
-        "📘 *FAQ*\n\n"
-        "❓ Как вступить?\n"
-        "— Подай заявку в разделе набора\n\n"
-        "❓ Где правила?\n"
-        "— Ознакомься с правилами сервера\n\n"
-        "Если ответа нет — напиши в поддержку 👇",
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🆘 Поддержка", callback_data="support")],
-            [InlineKeyboardButton(text="⬅ Назад", callback_data="back")]
-        ])
-    )
-
-
-@dp.callback_query(lambda c: c.data == "support")
-async def support(callback: types.CallbackQuery):
-    waiting_users[callback.from_user.id] = True
-    await callback.message.edit_text(
-        "🆘 Напиши свой вопрос одним сообщением.\n"
-        "Администрация ответит тебе здесь.",
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="⬅ Назад", callback_data="back")]]
+async def forward_to_admins(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_message = update.message
+    user = user_message.from_user
+    if user.id not in ADMIN_IDS:
+        forward_text = (
+            f"Новое сообщение от пользователя {user.full_name} (@{user.username}, ID: {user.id}).\n"
+            "Чтобы ответить, используйте функцию 'Ответить' (Reply) на это сообщение."
         )
-    )
+        for admin_id in ADMIN_IDS:
+            try:
+                await context.bot.send_message(chat_id=admin_id, text=forward_text)
+                await context.bot.forward_message(
+                    chat_id=admin_id,
+                    from_chat_id=user_message.chat_id,
+                    message_id=user_message.message_id
+                )
+            except Exception as e:
+                logger.error(f"Не удалось отправить сообщение админу {admin_id}: {e}")
 
+async def reply_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.message.reply_to_message and update.message.from_user.id in ADMIN_IDS:
+        original_message = update.message.reply_to_message
+        if original_message.forward_from:
+            user_id = original_message.forward_from.id
+            try:
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=f"Ответ от администрации:\n\n{update.message.text}"
+                )
+                await update.message.reply_text("✅ Ответ пользователю отправлен.")
+            except Exception as e:
+                await update.message.reply_text(f"❌ Не удалось отправить ответ: {e}")
+        elif "Новое сообщение от пользователя" in original_message.text:
+            try:
+                user_id_line = [line for line in original_message.text.split('\n') if "ID:" in line][0]
+                user_id = int(user_id_line.split("ID: ")[1].replace(")", ""))
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=f"Ответ от администрации:\n\n{update.message.text}"
+                )
+                await update.message.reply_text("✅ Ответ пользователю отправлен.")
+            except (IndexError, ValueError):
+                 await update.message.reply_text("❌ Не удалось извлечь ID пользователя. Пожалуйста, отвечайте на пересланное сообщение.")
+            except Exception as e:
+                await update.message.reply_text(f"❌ Не удалось отправить ответ: {e}")
 
-@dp.callback_query(lambda c: c.data == "back")
-async def back(callback: types.CallbackQuery):
-    await callback.message.edit_text(
-        "Главное меню 👇",
-        reply_markup=main_menu()
-    )
+def main() -> None:
+    application = Application.builder().token(TOKEN).build()
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(button))
+    application.add_handler(MessageHandler(filters.REPLY & filters.User(user_id=ADMIN_IDS), reply_to_user))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, forward_to_admins))
+    application.run_polling()
 
-
-@dp.message()
-async def messages(message: types.Message):
-    user_id = message.from_user.id
-
-    if user_id in ADMINS and message.reply_to_message:
-        replied_id = message.reply_to_message.message_id
-        if replied_id in reply_map:
-            await bot.send_message(
-                reply_map[replied_id],
-                f"📩 Ответ администрации:\n\n{message.text}"
-            )
-        return
-
-    if waiting_users.get(user_id):
-        waiting_users.pop(user_id)
-
-        text = (
-            "📨 Новый вопрос в поддержку\n\n"
-            f"👤 @{message.from_user.username}\n"
-            f"🆔 {user_id}\n\n"
-            f"{message.text}"
-        )
-
-        for admin in ADMINS:
-            sent = await bot.send_message(admin, text)
-            reply_map[sent.message_id] = user_id
-
-        await message.answer("✅ Вопрос отправлен администрации.")
-
-
-async def main():
-    await dp.start_polling(bot)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
-
+if __name__ == '__main__':
+    main()
