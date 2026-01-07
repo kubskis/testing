@@ -2,40 +2,32 @@
 
 import asyncio
 import logging
-import os  # <-- Импортируем библиотеку для работы с переменными окружения
+import base64  # <-- Библиотека для кодирования/декодирования
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 
-# --- БЕРЕМ СЕКРЕТНЫЕ ДАННЫЕ ИЗ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ ---
+# --- ДЕКОДИРУЕМ СЕКРЕТНЫЕ ДАННЫЕ ИЗ BASE64 ---
 
-# Пытаемся получить токен из переменной окружения 'TELEGRAM_TOKEN'
-TOKEN = os.getenv("TELEGRAM_TOKEN")
-if not TOKEN:
-    raise ValueError("Не найдена переменная окружения TELEGRAM_TOKEN. Добавьте ее в настройках хостинга.")
+# Здесь "спрятан" ваш токен: 8526419531:AAHEYXxzCgVZ2orcBuoY6Ce-WwT0dWuRwR0
+ENCODED_TOKEN = 'ODUyNjQxOTUzMTpBQUhFWVh6Q2dWWjJvcmNCdW9ZNkNlLVd3VDBkV3VSc1Iw'
+TOKEN = base64.b64decode(ENCODED_TOKEN).decode('utf-8')
 
-# Пытаемся получить ID админов из переменной 'ADMIN_IDS'
-ADMIN_IDS_STR = os.getenv("ADMIN_IDS")
-if not ADMIN_IDS_STR:
-    raise ValueError("Не найдена переменная окружения ADMIN_IDS. Добавьте ее в настройках хостинга.")
-
-# Превращаем строку "id1,id2,id3" в список чисел
-try:
-    ADMIN_IDS = [int(admin_id.strip()) for admin_id in ADMIN_IDS_STR.split(',')]
-except ValueError:
-    raise ValueError("Переменная ADMIN_IDS должна быть списком ID, разделенных запятыми (например: 123,456,789)")
-
+# Здесь "спрятаны" ваши ID: 959984030,6769475417,1034179881,7958069580
+ENCODED_ADMIN_IDS = 'OTU5OTg0MDMwLDY3Njk0NzU0MTcsMTAzNDE3OTg4MSw3OTU4MDY5NTgw'
+ADMIN_IDS_STR = base64.b64decode(ENCODED_ADMIN_IDS).decode('utf-8')
+ADMIN_IDS = [int(admin_id.strip()) for admin_id in ADMIN_IDS_STR.split(',')]
 
 # --------------------------------------------------------
 
+# Остальная часть кода остается без изменений
 
-# Настройка логирования для отладки
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Текст для раздела FAQ (без изменений)
 FAQ_TEXT = """
 *Часто задаваемые вопросы (FAQ):*
 
@@ -50,9 +42,6 @@ FAQ_TEXT = """
 
 Если у вас остались вопросы, нажмите на кнопку «✍️ Написать поддержке».
 """
-
-# Все остальные функции (start, button, forward_to_admins, reply_to_user, main)
-# остаются без изменений. Я оставлю их здесь для полноты файла.
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     keyboard = [
