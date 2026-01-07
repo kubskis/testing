@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-import base64  # <-- Библиотека для кодирования/декодирования
+import base64  # <-- Убедитесь, что эта строка есть
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
