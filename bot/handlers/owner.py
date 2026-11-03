@@ -1,3 +1,4 @@
+import html
 import logging
 
 from aiogram import Bot, F, Router
@@ -7,60 +8,166 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
-from .. import db, texts
+from .. import db, render, services, texts
 from ..config import Config
 
 router = Router()
 log = logging.getLogger(__name__)
 
-
-class OwnerReply(StatesGroup):
-    waiting = State()
+NO_REASON = {"-", "—", "–"}
 
 
-@router.callback_query(F.data.startswith("reply:"))
-async def reply_start(call: CallbackQuery, state: FSMContext, config: Config) -> None:
-    if call.from_user.id not in config.owner_ids:
+class OwnerAction(StatesGroup):
+    reject = State()    # ждём причину отказа
+    message = State()   # ждём сообщение клиенту
+
+
+def _is_owner(user_id: int, config: Config) -> bool:
+    return user_id in config.owner_ids
+
+
+async def _stale(call: CallbackQuery, bot: Bot, config: Config, req: dict) -> None:
+    """Кто-то уже обработал заявку — показываем актуальный статус."""
+    await call.answer(f"Заявка уже: {render.status_label(req)}", show_alert=True)
+    await services.refresh_owner_messages(bot, config, req["id"])
+
+
+@router.callback_query(F.data.startswith("o:"))
+async def owner_action(
+    call: CallbackQuery, state: FSMContext, bot: Bot, config: Config
+) -> None:
+    if not _is_owner(call.from_user.id, config):
         await call.answer("Нет доступа", show_alert=True)
         return
-    _, user_id, request_id = call.data.split(":")
-    await state.set_state(OwnerReply.waiting)
-    await state.update_data(user_id=int(user_id), request_id=int(request_id))
-    await call.message.answer(texts.OWNER_REPLY_PROMPT.format(id=request_id))
-    await call.answer()
 
-
-@router.callback_query(F.data.startswith("done:"))
-async def mark_done(call: CallbackQuery, config: Config) -> None:
-    if call.from_user.id not in config.owner_ids:
-        await call.answer("Нет доступа", show_alert=True)
+    _, action, raw_id = call.data.split(":")
+    req = db.get_request(config.db_path, int(raw_id))
+    if not req:
+        await call.answer("Заявка не найдена", show_alert=True)
         return
-    request_id = int(call.data.split(":")[1])
-    db.set_status(config.db_path, request_id, "done")
-    await call.message.edit_reply_markup(reply_markup=None)
-    await call.message.answer(f"✅ Заявка #{request_id} отмечена выполненной.")
-    await call.answer()
+    rid, kind, status = req["id"], req["kind"], req["status"]
+    is_open = status in db.ACTIVE
+
+    if action == "acc":
+        if status != "pending" or kind == "question":
+            await _stale(call, bot, config, req)
+            return
+        db.set_status(config.db_path, rid, "queued")
+        req = db.get_request(config.db_path, rid)
+        pos = db.queue_position(config.db_path, req)
+        sent = await services.notify_user(
+            bot, req["user_id"], texts.ACCEPTED.format(id=rid, pos=pos)
+        )
+        await services.refresh_owner_messages(bot, config, rid)
+        await call.answer("Принято ✅" + ("" if sent else " (клиенту не доставлено)"))
+
+    elif action in ("done", "close"):
+        if not is_open or (kind != "question" and status != "queued"):
+            await _stale(call, bot, config, req)
+            return
+        db.set_status(config.db_path, rid, "done")
+        text = texts.QUESTION_CLOSED if kind == "question" else texts.DONE
+        sent = await services.notify_user(bot, req["user_id"], text.format(id=rid))
+        await services.refresh_owner_messages(bot, config, rid)
+        await call.answer("Готово ✅" + ("" if sent else " (клиенту не доставлено)"))
+
+    elif action == "rej":
+        if not is_open:
+            await _stale(call, bot, config, req)
+            return
+        await state.set_state(OwnerAction.reject)
+        await state.update_data(request_id=rid)
+        await call.message.answer(texts.REJECT_PROMPT.format(id=rid))
+        await call.answer()
+
+    elif action == "msg":
+        if status == "rejected" or (kind == "question" and status != "pending"):
+            await _stale(call, bot, config, req)
+            return
+        await state.set_state(OwnerAction.message)
+        await state.update_data(request_id=rid)
+        await call.message.answer(texts.REPLY_PROMPT.format(id=rid))
+        await call.answer()
+
+    else:
+        await call.answer()
 
 
-@router.message(Command("cancel"), OwnerReply.waiting)
-async def reply_cancel(message: Message, state: FSMContext) -> None:
+@router.message(Command("cancel"), OwnerAction.reject)
+@router.message(Command("cancel"), OwnerAction.message)
+async def cancel_action(message: Message, state: FSMContext) -> None:
     await state.clear()
     await message.answer("Отменено.")
 
 
-@router.message(OwnerReply.waiting)
-async def reply_send(message: Message, state: FSMContext, bot: Bot, config: Config) -> None:
-    if message.from_user.id not in config.owner_ids:
+@router.message(OwnerAction.reject)
+async def reject_reason(message: Message, state: FSMContext, bot: Bot, config: Config) -> None:
+    if not _is_owner(message.from_user.id, config):
         return
-    data = await state.get_data()
-    user_id, request_id = data["user_id"], data["request_id"]
+    if not message.text:
+        await message.answer("Напиши причину текстом или отправь <code>-</code> (без причины).")
+        return
+
+    rid = (await state.get_data())["request_id"]
     await state.clear()
+    req = db.get_request(config.db_path, rid)
+    if not req or req["status"] not in db.ACTIVE:
+        await message.answer("Заявка уже закрыта другим владельцем.")
+        return
+
+    text = message.text.strip()
+    reason = None if text in NO_REASON else text
+    db.set_status(config.db_path, rid, "rejected", reason)
+
+    user_text = texts.REJECTED.format(id=rid)
+    if reason:
+        user_text += texts.REJECTED_REASON.format(reason=html.escape(reason))
+    sent = await services.notify_user(bot, req["user_id"], user_text)
+    await services.refresh_owner_messages(bot, config, rid)
+    await message.answer(
+        f"❌ Заявка #{rid} отклонена"
+        + (f" (причина: {html.escape(reason)})" if reason else " без причины")
+        + ("." if sent else ". ⚠️ Клиенту сообщение не доставлено.")
+    )
+
+
+@router.message(OwnerAction.message)
+async def send_to_client(message: Message, state: FSMContext, bot: Bot, config: Config) -> None:
+    if not _is_owner(message.from_user.id, config):
+        return
+    rid = (await state.get_data())["request_id"]
+    await state.clear()
+    req = db.get_request(config.db_path, rid)
+    if not req:
+        await message.answer("Заявка не найдена.")
+        return
     try:
-        await bot.send_message(user_id, f"💬 Ответ по заявке #{request_id}:")
-        await message.copy_to(user_id)
+        await bot.send_message(req["user_id"], texts.OWNER_MESSAGE.format(id=rid))
+        await message.copy_to(req["user_id"])
     except TelegramAPIError as e:
-        log.warning("Не удалось отправить ответ пользователю %s: %s", user_id, e)
+        log.warning("Не удалось отправить сообщение пользователю %s: %s", req["user_id"], e)
         await message.answer("😔 Не удалось отправить (возможно, клиент заблокировал бота).")
         return
-    db.set_status(config.db_path, request_id, "answered")
-    await message.answer(f"✅ Ответ по заявке #{request_id} отправлен.")
+
+    # Ответ на вопрос закрывает его
+    if req["kind"] == "question" and req["status"] == "pending":
+        db.set_status(config.db_path, rid, "done")
+        await services.refresh_owner_messages(bot, config, rid)
+    await message.answer(f"✅ Сообщение по заявке #{rid} отправлено.")
+
+
+@router.message(Command("queue"))
+async def show_queue(message: Message, config: Config) -> None:
+    if not _is_owner(message.from_user.id, config):
+        return
+    rows = db.list_active(config.db_path)
+    if not rows:
+        await message.answer("Активных заявок нет 🎉")
+        return
+    lines = ["<b>Открытые заявки:</b>"]
+    for r in rows:
+        lines.append(
+            f"#{r['id']} · {texts.KIND_TITLES[r['kind']]} · {render.status_label(r)} · "
+            f"{html.escape(render.user_label(r))}"
+        )
+    await message.answer("\n".join(lines))

@@ -1,44 +1,160 @@
+import json
 import sqlite3
 from contextlib import closing
 from pathlib import Path
 
+# Заявка считается «открытой», пока у неё один из этих статусов.
+# Пока заявка открыта, этот же человек не может подать заявку того же типа.
+ACTIVE = ("pending", "queued")
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS requests (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id    INTEGER NOT NULL,
-    username   TEXT,
-    full_name  TEXT,
-    kind       TEXT NOT NULL,           -- stickers / emoji / question
-    text       TEXT,
-    status     TEXT NOT NULL DEFAULT 'new',  -- new / answered / done
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id       INTEGER NOT NULL,
+    username      TEXT,
+    full_name     TEXT,
+    kind          TEXT NOT NULL,                 -- stickers / emoji / question
+    answers       TEXT NOT NULL DEFAULT '{}',    -- JSON: ответы анкеты
+    photos        TEXT NOT NULL DEFAULT '[]',    -- JSON: file_id фото
+    status        TEXT NOT NULL DEFAULT 'pending',  -- pending / queued / done / rejected
+    reject_reason TEXT,
+    created_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at    TEXT
 );
+CREATE TABLE IF NOT EXISTS owner_msgs (
+    request_id INTEGER NOT NULL,
+    owner_id   INTEGER NOT NULL,
+    message_id INTEGER NOT NULL,
+    PRIMARY KEY (request_id, owner_id)
+);
+CREATE INDEX IF NOT EXISTS idx_requests_user ON requests (user_id, kind, status);
 """
+
+# Колонки, которых могло не быть в самой первой версии базы
+_MIGRATE_COLUMNS = {
+    "answers": "TEXT NOT NULL DEFAULT '{}'",
+    "photos": "TEXT NOT NULL DEFAULT '[]'",
+    "reject_reason": "TEXT",
+    "updated_at": "TEXT",
+}
+
+
+def _connect(path: str) -> sqlite3.Connection:
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _row(row: sqlite3.Row | None) -> dict | None:
+    if row is None:
+        return None
+    d = dict(row)
+    d["answers"] = json.loads(d.get("answers") or "{}")
+    d["photos"] = json.loads(d.get("photos") or "[]")
+    return d
 
 
 def init_db(path: str) -> None:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
-    with closing(sqlite3.connect(path)) as conn, conn:
-        conn.execute(SCHEMA)
+    with closing(_connect(path)) as conn, conn:
+        conn.executescript(SCHEMA)
+        existing = {r["name"] for r in conn.execute("PRAGMA table_info(requests)")}
+        for name, ddl in _MIGRATE_COLUMNS.items():
+            if name not in existing:
+                conn.execute(f"ALTER TABLE requests ADD COLUMN {name} {ddl}")
 
 
-def add_request(
+def get_active(path: str, user_id: int, kind: str) -> dict | None:
+    q = ",".join("?" * len(ACTIVE))
+    with closing(_connect(path)) as conn:
+        row = conn.execute(
+            f"SELECT * FROM requests WHERE user_id = ? AND kind = ? AND status IN ({q}) "
+            "ORDER BY id DESC LIMIT 1",
+            (user_id, kind, *ACTIVE),
+        ).fetchone()
+    return _row(row)
+
+
+def create_request(
     path: str,
     user_id: int,
     username: str | None,
     full_name: str,
     kind: str,
-    text: str,
-) -> int:
-    with closing(sqlite3.connect(path)) as conn, conn:
+    answers: dict,
+    photos: list[str],
+) -> int | None:
+    """Создаёт заявку. Возвращает её номер, либо None, если у человека уже есть
+    открытая заявка такого типа."""
+    if get_active(path, user_id, kind):
+        return None
+    with closing(_connect(path)) as conn, conn:
         cur = conn.execute(
-            "INSERT INTO requests (user_id, username, full_name, kind, text) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (user_id, username, full_name, kind, text),
+            "INSERT INTO requests (user_id, username, full_name, kind, answers, photos) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                user_id,
+                username,
+                full_name,
+                kind,
+                json.dumps(answers, ensure_ascii=False),
+                json.dumps(photos),
+            ),
         )
         return cur.lastrowid
 
 
-def set_status(path: str, request_id: int, status: str) -> None:
-    with closing(sqlite3.connect(path)) as conn, conn:
-        conn.execute("UPDATE requests SET status = ? WHERE id = ?", (status, request_id))
+def delete_request(path: str, request_id: int) -> None:
+    with closing(_connect(path)) as conn, conn:
+        conn.execute("DELETE FROM owner_msgs WHERE request_id = ?", (request_id,))
+        conn.execute("DELETE FROM requests WHERE id = ?", (request_id,))
+
+
+def get_request(path: str, request_id: int) -> dict | None:
+    with closing(_connect(path)) as conn:
+        row = conn.execute("SELECT * FROM requests WHERE id = ?", (request_id,)).fetchone()
+    return _row(row)
+
+
+def set_status(path: str, request_id: int, status: str, reason: str | None = None) -> None:
+    with closing(_connect(path)) as conn, conn:
+        conn.execute(
+            "UPDATE requests SET status = ?, reject_reason = ?, updated_at = CURRENT_TIMESTAMP "
+            "WHERE id = ?",
+            (status, reason, request_id),
+        )
+
+
+def queue_position(path: str, request: dict) -> int:
+    """Место заявки в очереди среди принятых заявок того же типа."""
+    with closing(_connect(path)) as conn:
+        (n,) = conn.execute(
+            "SELECT COUNT(*) FROM requests WHERE kind = ? AND status = 'queued' AND id <= ?",
+            (request["kind"], request["id"]),
+        ).fetchone()
+    return n
+
+
+def list_active(path: str) -> list[dict]:
+    q = ",".join("?" * len(ACTIVE))
+    with closing(_connect(path)) as conn:
+        rows = conn.execute(
+            f"SELECT * FROM requests WHERE status IN ({q}) ORDER BY id", ACTIVE
+        ).fetchall()
+    return [_row(r) for r in rows]
+
+
+def save_owner_msg(path: str, request_id: int, owner_id: int, message_id: int) -> None:
+    with closing(_connect(path)) as conn, conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO owner_msgs (request_id, owner_id, message_id) VALUES (?, ?, ?)",
+            (request_id, owner_id, message_id),
+        )
+
+
+def get_owner_msgs(path: str, request_id: int) -> list[tuple[int, int]]:
+    with closing(_connect(path)) as conn:
+        rows = conn.execute(
+            "SELECT owner_id, message_id FROM owner_msgs WHERE request_id = ?", (request_id,)
+        ).fetchall()
+    return [(r["owner_id"], r["message_id"]) for r in rows]
