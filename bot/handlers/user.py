@@ -165,7 +165,7 @@ async def on_choice(call: CallbackQuery, state: FSMContext) -> None:
             return
         value = step.options[opt]
         try:
-            await call.message.edit_text(f"{call.message.html_text}\n\n✔️ <b>{value}</b>")
+            await call.message.edit_text(f"{call.message.html_text}\n\n<b>Ответ: {value}</b>")
         except TelegramBadRequest:
             pass
         await call.answer()
@@ -185,7 +185,7 @@ async def on_skip(call: CallbackQuery, state: FSMContext) -> None:
             await call.answer()
             return
         try:
-            await call.message.edit_text(f"{call.message.html_text}\n\n⏭ <i>Пропущено</i>")
+            await call.message.edit_text(f"{call.message.html_text}\n\n<i>Пропущено</i>")
         except TelegramBadRequest:
             pass
         await call.answer()
@@ -200,12 +200,12 @@ async def on_answer(message: Message, state: FSMContext) -> None:
         step = FORMS[data["kind"]].steps[idx]
 
         if step.type == "choice":
-            await message.answer("Выбери вариант кнопкой под вопросом 👆")
+            await message.answer("Выбери вариант кнопкой под вопросом.")
             return
 
         text = (message.text or "").strip()
         if not text:
-            await message.answer("Ответь, пожалуйста, текстом ✍️")
+            await message.answer("Ответь, пожалуйста, текстом.")
             return
         if len(text) > MAX_TEXT_LEN:
             await message.answer(f"Слишком длинно, максимум {MAX_TEXT_LEN} символов.")
@@ -221,7 +221,7 @@ async def on_answer(message: Message, state: FSMContext) -> None:
             cost = extra_cost(value)
             if cost:
                 await message.answer(
-                    f"ℹ️ Сверх {FREE_LIMIT} шт. доплата составит {cost}⭐/{cost}₽."
+                    f"Сверх {FREE_LIMIT} шт. доплата составит {cost}⭐/{cost}₽."
                 )
 
         await _save_and_next(message, state, value)
@@ -250,7 +250,7 @@ async def on_photo(message: Message, state: FSMContext) -> None:
 
 @router.message(Form.photos)
 async def on_photo_wrong(message: Message) -> None:
-    await message.answer("Пришли фото персонажа 📷 (именно как фото, не как файл).")
+    await message.answer("Пришли фото персонажа (именно как фото, не как файл).")
 
 
 @router.callback_query(Form.photos, F.data == "form:submit")
@@ -283,7 +283,7 @@ async def receive_question(
 ) -> None:
     text = (message.text or "").strip()
     if not text:
-        await message.answer("Напиши вопрос текстом ✍️")
+        await message.answer("Напиши вопрос текстом.")
         return
     if len(text) > QUESTION_MAX_LEN:
         await message.answer(f"Слишком длинно, максимум {QUESTION_MAX_LEN} символов.")

@@ -59,7 +59,7 @@ async def owner_action(
             bot, req["user_id"], texts.ACCEPTED.format(id=rid, pos=pos)
         )
         await services.refresh_owner_messages(bot, config, rid)
-        await call.answer("Принято ✅" + ("" if sent else " (клиенту не доставлено)"))
+        await call.answer("Принято" + ("" if sent else " (клиенту не доставлено)"))
 
     elif action in ("done", "close"):
         if not is_open or (kind != "question" and status != "queued"):
@@ -69,7 +69,7 @@ async def owner_action(
         text = texts.QUESTION_CLOSED if kind == "question" else texts.DONE
         sent = await services.notify_user(bot, req["user_id"], text.format(id=rid))
         await services.refresh_owner_messages(bot, config, rid)
-        await call.answer("Готово ✅" + ("" if sent else " (клиенту не доставлено)"))
+        await call.answer("Готово" + ("" if sent else " (клиенту не доставлено)"))
 
     elif action == "rej":
         if not is_open:
@@ -125,9 +125,9 @@ async def reject_reason(message: Message, state: FSMContext, bot: Bot, config: C
     sent = await services.notify_user(bot, req["user_id"], user_text)
     await services.refresh_owner_messages(bot, config, rid)
     await message.answer(
-        f"❌ Заявка #{rid} отклонена"
+        f"Заявка #{rid} отклонена"
         + (f" (причина: {html.escape(reason)})" if reason else " без причины")
-        + ("." if sent else ". ⚠️ Клиенту сообщение не доставлено.")
+        + ("." if sent else ". Клиенту сообщение не доставлено.")
     )
 
 
@@ -146,14 +146,14 @@ async def send_to_client(message: Message, state: FSMContext, bot: Bot, config: 
         await message.copy_to(req["user_id"])
     except TelegramAPIError as e:
         log.warning("Не удалось отправить сообщение пользователю %s: %s", req["user_id"], e)
-        await message.answer("😔 Не удалось отправить (возможно, клиент заблокировал бота).")
+        await message.answer("Не удалось отправить (возможно, клиент заблокировал бота).")
         return
 
     # Ответ на вопрос закрывает его
     if req["kind"] == "question" and req["status"] == "pending":
         db.set_status(config.db_path, rid, "done")
         await services.refresh_owner_messages(bot, config, rid)
-    await message.answer(f"✅ Сообщение по заявке #{rid} отправлено.")
+    await message.answer(f"Сообщение по заявке #{rid} отправлено.")
 
 
 @router.message(Command("queue"))
@@ -162,7 +162,7 @@ async def show_queue(message: Message, config: Config) -> None:
         return
     rows = db.list_active(config.db_path)
     if not rows:
-        await message.answer("Активных заявок нет 🎉")
+        await message.answer("Активных заявок нет.")
         return
     lines = ["<b>Открытые заявки:</b>"]
     for r in rows:

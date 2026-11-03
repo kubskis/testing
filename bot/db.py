@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS requests (
 CREATE TABLE IF NOT EXISTS owner_msgs (
     request_id INTEGER NOT NULL,
     owner_id   INTEGER NOT NULL,
-    message_id INTEGER NOT NULL,
+    message_id INTEGER NOT NULL,        -- сообщение с кнопками (или с текстом заявки)
+    caption_id INTEGER,                 -- первое фото альбома с подписью-заявкой, если есть
     PRIMARY KEY (request_id, owner_id)
 );
 CREATE INDEX IF NOT EXISTS idx_requests_user ON requests (user_id, kind, status);
@@ -62,6 +63,9 @@ def init_db(path: str) -> None:
         for name, ddl in _MIGRATE_COLUMNS.items():
             if name not in existing:
                 conn.execute(f"ALTER TABLE requests ADD COLUMN {name} {ddl}")
+        owner_cols = {r["name"] for r in conn.execute("PRAGMA table_info(owner_msgs)")}
+        if "caption_id" not in owner_cols:
+            conn.execute("ALTER TABLE owner_msgs ADD COLUMN caption_id INTEGER")
 
 
 def get_active(path: str, user_id: int, kind: str) -> dict | None:
@@ -144,17 +148,22 @@ def list_active(path: str) -> list[dict]:
     return [_row(r) for r in rows]
 
 
-def save_owner_msg(path: str, request_id: int, owner_id: int, message_id: int) -> None:
+def save_owner_msg(
+    path: str, request_id: int, owner_id: int, message_id: int, caption_id: int | None = None
+) -> None:
     with closing(_connect(path)) as conn, conn:
         conn.execute(
-            "INSERT OR REPLACE INTO owner_msgs (request_id, owner_id, message_id) VALUES (?, ?, ?)",
-            (request_id, owner_id, message_id),
+            "INSERT OR REPLACE INTO owner_msgs (request_id, owner_id, message_id, caption_id) "
+            "VALUES (?, ?, ?, ?)",
+            (request_id, owner_id, message_id, caption_id),
         )
 
 
-def get_owner_msgs(path: str, request_id: int) -> list[tuple[int, int]]:
+def get_owner_msgs(path: str, request_id: int) -> list[tuple[int, int, int | None]]:
+    """[(owner_id, message_id, caption_id), ...]"""
     with closing(_connect(path)) as conn:
         rows = conn.execute(
-            "SELECT owner_id, message_id FROM owner_msgs WHERE request_id = ?", (request_id,)
+            "SELECT owner_id, message_id, caption_id FROM owner_msgs WHERE request_id = ?",
+            (request_id,),
         ).fetchall()
-    return [(r["owner_id"], r["message_id"]) for r in rows]
+    return [(r["owner_id"], r["message_id"], r["caption_id"]) for r in rows]
