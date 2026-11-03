@@ -1,6 +1,11 @@
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.types import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+)
 
+from . import texts
 from .forms import Step
 
 # Цвета кнопок в Telegram: "primary" — синий, "success" — зелёный,
@@ -16,23 +21,25 @@ def _markup(*rows: list[InlineKeyboardButton]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[list(r) for r in rows])
 
 
-def main_menu() -> InlineKeyboardMarkup:
-    # Чтобы добавить кнопку, допиши её в нужный ряд (по две в ряд).
-    return _markup(
-        [_btn("Запрос стикеров", "req:stickers", PRIMARY),
-         _btn("Запрос эмодзи", "req:emoji", SUCCESS)],
-        [_btn("Платные услуги", "menu:paid", DANGER),
-         _btn("Задать вопрос", "req:question", PRIMARY)],
-        [_btn("Перезагрузить меню", "menu:reload")],
+def main_reply_kb() -> ReplyKeyboardMarkup:
+    """Постоянная клавиатура под полем ввода. Чтобы добавить кнопку, допиши её в ряд
+    (по две в ряд) и добавь обработчик по тексту в bot/handlers/user.py."""
+    def b(text: str, style: str | None = None) -> KeyboardButton:
+        return KeyboardButton(text=text, style=style)
+
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [b(texts.BTN_STICKERS, PRIMARY), b(texts.BTN_EMOJI, SUCCESS)],
+            [b(texts.BTN_PAID, DANGER), b(texts.BTN_QUESTION, PRIMARY)],
+            [b(texts.BTN_RELOAD)],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
     )
 
 
-def back_menu() -> InlineKeyboardMarkup:
-    return _markup([_btn("Назад", "menu:reload")])
-
-
 def cancel_menu() -> InlineKeyboardMarkup:
-    return _markup([_btn("Отмена", "menu:reload", DANGER)])
+    return _markup([_btn("Отмена", "menu:cancel", DANGER)])
 
 
 def step_kb(idx: int, step: Step) -> InlineKeyboardMarkup:
@@ -42,14 +49,14 @@ def step_kb(idx: int, step: Step) -> InlineKeyboardMarkup:
         rows.append([_btn(o, f"ans:{idx}:{i}", PRIMARY) for i, o in enumerate(step.options)])
     if step.skippable:
         rows.append([_btn("Пропустить", f"skip:{idx}")])
-    rows.append([_btn("Отмена", "menu:reload", DANGER)])
+    rows.append([_btn("Отмена", "menu:cancel", DANGER)])
     return _markup(*rows)
 
 
 def submit_kb() -> InlineKeyboardMarkup:
     return _markup(
         [_btn("Отправить анкету", "form:submit", SUCCESS)],
-        [_btn("Отмена", "menu:reload", DANGER)],
+        [_btn("Отмена", "menu:cancel", DANGER)],
     )
 
 

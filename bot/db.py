@@ -28,6 +28,10 @@ CREATE TABLE IF NOT EXISTS owner_msgs (
     caption_id INTEGER,                 -- первое фото альбома с подписью-заявкой, если есть
     PRIMARY KEY (request_id, owner_id)
 );
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
 CREATE INDEX IF NOT EXISTS idx_requests_user ON requests (user_id, kind, status);
 """
 
@@ -167,3 +171,21 @@ def get_owner_msgs(path: str, request_id: int) -> list[tuple[int, int, int | Non
             (request_id,),
         ).fetchall()
     return [(r["owner_id"], r["message_id"], r["caption_id"]) for r in rows]
+
+
+def get_setting(path: str, key: str) -> str | None:
+    with closing(_connect(path)) as conn:
+        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else None
+
+
+def set_setting(path: str, key: str, value: str | None) -> None:
+    with closing(_connect(path)) as conn, conn:
+        if value is None:
+            conn.execute("DELETE FROM settings WHERE key = ?", (key,))
+        else:
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )

@@ -4,7 +4,7 @@ import re
 from collections import defaultdict
 
 from aiogram import Bot, F, Router
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters import Command, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -21,7 +21,7 @@ from ..forms import (
     count_limit,
     extra_cost,
 )
-from ..keyboards import back_menu, cancel_menu, main_menu, step_kb, submit_kb
+from ..keyboards import cancel_menu, main_reply_kb, step_kb, submit_kb
 
 router = Router()
 fallback_router = Router()
@@ -40,81 +40,102 @@ class Form(StatesGroup):
     question = State()    # ждём текст вопроса
 
 
-async def _show(call: CallbackQuery, text: str, markup) -> None:
-    """Редактирует сообщение с кнопками; если нельзя — отправляет новое."""
-    try:
-        await call.message.edit_text(text, reply_markup=markup)
-    except TelegramBadRequest:
-        await call.message.answer(text, reply_markup=markup)
+async def send_welcome(message: Message, config: Config) -> None:
+    """Приветствие с фото (если владелица его загрузила) и постоянной клавиатурой."""
+    kb = main_reply_kb()
+    photo = db.get_setting(config.db_path, "welcome_photo")
+    if photo:
+        try:
+            await message.answer_photo(photo, caption=texts.WELCOME, reply_markup=kb)
+            return
+        except TelegramAPIError as e:
+            log.warning("Не удалось отправить приветственное фото: %s", e)
+    await message.answer(texts.WELCOME, reply_markup=kb)
 
 
 # ---------------------------------------------------------------- меню
 
 @router.message(CommandStart())
-async def start(message: Message, state: FSMContext) -> None:
+async def start(message: Message, state: FSMContext, config: Config) -> None:
     await state.clear()
-    await message.answer(texts.WELCOME, reply_markup=main_menu())
+    await send_welcome(message, config)
 
 
 @router.message(Command("cancel"), StateFilter(Form.answering, Form.photos, Form.question))
 async def cancel_form(message: Message, state: FSMContext) -> None:
     await state.clear()
-    await message.answer(texts.WELCOME, reply_markup=main_menu())
+    await message.answer(texts.CANCELLED, reply_markup=main_reply_kb())
 
 
-@router.callback_query(F.data == "menu:reload")
-async def reload_menu(call: CallbackQuery, state: FSMContext) -> None:
+@router.message(F.text == texts.BTN_RELOAD)
+async def reload_menu(message: Message, state: FSMContext, config: Config) -> None:
     await state.clear()
-    await _show(call, texts.WELCOME, main_menu())
-    await call.answer("Меню обновлено")
+    await send_welcome(message, config)
 
 
-@router.callback_query(F.data == "menu:paid")
-async def paid_services(call: CallbackQuery, config: Config) -> None:
+@router.callback_query(F.data == "menu:cancel")
+async def cancel_inline(call: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    try:
+        await call.message.edit_text(texts.CANCELLED)
+    except TelegramBadRequest:
+        await call.message.answer(texts.CANCELLED, reply_markup=main_reply_kb())
+    await call.answer()
+
+
+@router.message(F.text == texts.BTN_PAID)
+async def paid_services(message: Message, state: FSMContext, config: Config) -> None:
+    await state.clear()
     text = texts.PAID_SERVICES
     if config.owner_usernames:
         contacts = ", ".join(f"@{u}" for u in config.owner_usernames)
         text += f"\n\nДля заказа пиши: {contacts}"
-    await _show(call, text, back_menu())
-    await call.answer()
+    await message.answer(text)
 
 
 # ---------------------------------------------------------------- старт заявки
 
-@router.callback_query(F.data.startswith("req:"))
-async def start_request(call: CallbackQuery, state: FSMContext, config: Config) -> None:
-    kind = call.data.split(":", 1)[1]
-    if kind not in texts.KIND_TITLES:
-        await call.answer()
-        return
+@router.message(F.text == texts.BTN_STICKERS)
+async def request_stickers(message: Message, state: FSMContext, config: Config) -> None:
+    await start_request(message, state, config, "stickers")
+
+
+@router.message(F.text == texts.BTN_EMOJI)
+async def request_emoji(message: Message, state: FSMContext, config: Config) -> None:
+    await start_request(message, state, config, "emoji")
+
+
+@router.message(F.text == texts.BTN_QUESTION)
+async def request_question(message: Message, state: FSMContext, config: Config) -> None:
+    await start_request(message, state, config, "question")
+
+
+async def start_request(
+    message: Message, state: FSMContext, config: Config, kind: str
+) -> None:
     await state.clear()
 
     # Одна открытая заявка каждого типа на человека
-    existing = db.get_active(config.db_path, call.from_user.id, kind)
+    existing = db.get_active(config.db_path, message.from_user.id, kind)
     if existing:
-        await _show(
-            call,
+        await message.answer(
             texts.ALREADY_ACTIVE.format(
                 what=texts.KIND_WHAT[kind],
                 id=existing["id"],
                 status=render.status_label(existing).lower(),
-            ),
-            back_menu(),
+            )
         )
-        await call.answer()
         return
 
     if kind == "question":
         await state.set_state(Form.question)
-        await _show(call, texts.QUESTION_PROMPT, cancel_menu())
-        await call.answer()
+        await message.answer(texts.QUESTION_PROMPT, reply_markup=cancel_menu())
         return
 
     await state.set_state(Form.answering)
     await state.set_data({"kind": kind, "idx": 0, "answers": {}, "photos": []})
-    await _show(call, FORMS[kind].intro, None)
-    await _ask_step(call.message, state)
-    await call.answer()
+    await message.answer(FORMS[kind].intro)
+    await _ask_step(message, state)
 
 
 # ---------------------------------------------------------------- шаги анкеты
@@ -312,18 +333,18 @@ async def _finish(
                     id=existing["id"],
                     status=render.status_label(existing).lower(),
                 ),
-                reply_markup=main_menu(),
             )
         return
 
     req = db.get_request(config.db_path, req_id)
     if await services.notify_owners(bot, config, req) == 0:
         db.delete_request(config.db_path, req_id)  # чтобы клиент мог попробовать снова
-        await message.answer(texts.SEND_FAILED, reply_markup=main_menu())
+        await message.answer(texts.SEND_FAILED)
         return
-    await message.answer(ok_text.format(id=req_id), reply_markup=main_menu())
+    await message.answer(ok_text.format(id=req_id))
 
 
 @fallback_router.message(StateFilter(None))
 async def fallback(message: Message) -> None:
-    await message.answer(texts.WELCOME, reply_markup=main_menu())
+    # Заодно возвращаем клавиатуру тем, у кого она пропала
+    await message.answer(texts.WELCOME, reply_markup=main_reply_kb())

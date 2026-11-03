@@ -171,3 +171,28 @@ async def show_queue(message: Message, config: Config) -> None:
             f"{html.escape(render.user_label(r))}"
         )
     await message.answer("\n".join(lines))
+
+
+@router.message(Command("setwelcome"))
+async def set_welcome(message: Message, config: Config) -> None:
+    """Фото для приветствия: пришли фото с подписью /setwelcome
+    или ответь командой /setwelcome на уже отправленное фото."""
+    if not _is_owner(message.from_user.id, config):
+        return
+    source = message if message.photo else message.reply_to_message
+    if not source or not source.photo:
+        await message.answer(
+            "Пришли фото с подписью <code>/setwelcome</code> "
+            "или ответь командой /setwelcome на фото."
+        )
+        return
+    db.set_setting(config.db_path, "welcome_photo", source.photo[-1].file_id)
+    await message.answer("Приветственное фото сохранено. Проверь: /start")
+
+
+@router.message(Command("clearwelcome"))
+async def clear_welcome(message: Message, config: Config) -> None:
+    if not _is_owner(message.from_user.id, config):
+        return
+    db.set_setting(config.db_path, "welcome_photo", None)
+    await message.answer("Приветственное фото убрано.")

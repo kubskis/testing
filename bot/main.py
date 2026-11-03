@@ -40,6 +40,7 @@ async def setup_menu(bot: Bot, config) -> None:
                 [
                     BotCommand(command="start", description="Открыть меню"),
                     BotCommand(command="queue", description="Открытые заявки"),
+                    BotCommand(command="setwelcome", description="Фото для приветствия"),
                     BotCommand(command="cancel", description="Отменить текущее действие"),
                 ],
                 scope=BotCommandScopeChat(chat_id=owner_id),
