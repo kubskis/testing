@@ -51,6 +51,8 @@ python main.py                   # то же самое: python -m bot.main
 ## Структура
 
 ```
+assets/
+  emoji_banner.jpg  картинка, которая идёт вместе с текстом анкеты на эмодзи (замени файл — поменяется картинка)
 bot/
   main.py        запуск бота
   config.py      чтение .env

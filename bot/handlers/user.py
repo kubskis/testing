@@ -2,13 +2,14 @@ import asyncio
 import logging
 import re
 from collections import defaultdict
+from pathlib import Path
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters import Command, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, FSInputFile, Message
 
 from .. import db, render, services, texts
 from ..config import Config
@@ -32,6 +33,11 @@ log = logging.getLogger(__name__)
 _locks: defaultdict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 QUESTION_MAX_LEN = 1500
+
+# Картинки, которые идут вместе с текстом анкеты. Чтобы поменять картинку,
+# замени файл в папке assets (имя файла оставь прежним).
+ASSETS = Path(__file__).resolve().parent.parent.parent / "assets"
+FORM_BANNERS = {"emoji": ASSETS / "emoji_banner.jpg"}
 
 
 class Form(StatesGroup):
@@ -110,6 +116,28 @@ async def request_question(message: Message, state: FSMContext, config: Config) 
     await start_request(message, state, config, "question")
 
 
+async def _send_intro(message: Message, config: Config, kind: str) -> None:
+    """Текст анкеты; если для неё есть картинка — отправляется вместе с картинкой."""
+    intro = FORMS[kind].intro
+    banner = FORM_BANNERS.get(kind)
+    if banner and banner.exists():
+        st = banner.stat()
+        # file_id кэшируем: после первой отправки Telegram хранит картинку у себя.
+        # В ключе размер и время файла, поэтому после замены картинки кэш обновится.
+        key = f"banner_{kind}_{st.st_size}_{int(st.st_mtime)}"
+        cached = db.get_setting(config.db_path, key)
+        try:
+            sent = await message.answer_photo(cached or FSInputFile(banner), caption=intro)
+            if not cached:
+                db.set_setting(config.db_path, key, sent.photo[-1].file_id)
+            return
+        except TelegramAPIError as e:
+            log.warning("Не удалось отправить картинку анкеты %s: %s", kind, e)
+            if cached:
+                db.set_setting(config.db_path, key, None)
+    await message.answer(intro)
+
+
 async def start_request(
     message: Message, state: FSMContext, config: Config, kind: str
 ) -> None:
@@ -134,7 +162,7 @@ async def start_request(
 
     await state.set_state(Form.answering)
     await state.set_data({"kind": kind, "idx": 0, "answers": {}, "photos": []})
-    await message.answer(FORMS[kind].intro)
+    await _send_intro(message, config, kind)
     await _ask_step(message, state)
 
 
