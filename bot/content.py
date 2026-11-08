@@ -53,6 +53,11 @@ def get_text(path: str, key: str) -> str:
     return db.get_setting(path, _PREFIX + key) or default_text(key)
 
 
+def custom_text(path: str, key: str) -> str | None:
+    """Текст, сохранённый владелицами, либо None, если используется стандартный."""
+    return db.get_setting(path, _PREFIX + key)
+
+
 def is_custom(path: str, key: str) -> bool:
     return db.get_setting(path, _PREFIX + key) is not None
 

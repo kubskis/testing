@@ -86,8 +86,11 @@ async def admin_callbacks(call: CallbackQuery, state: FSMContext, config: Config
         await state.update_data(key=key)
         await call.message.answer(
             f"Пришли новый текст для «{item.title}» одним сообщением.\n"
-            f"Максимум {item.max_len} символов. Жирный, курсив и другое форматирование "
-            "Telegram сохранится.\n"
+            f"Максимум {item.max_len} символов.\n"
+            "Жирный, курсив и другое форматирование сохранятся. Премиум-эмодзи тоже: "
+            "просто вставь их в сообщение, искать их ID не нужно. "
+            "Telegram показывает премиум-эмодзи в сообщениях бота не всегда; "
+            "если они не отобразятся, будет обычный эмодзи.\n"
             "/cancel — отмена."
         )
 
@@ -123,8 +126,22 @@ async def receive_text(message: Message, state: FSMContext, config: Config) -> N
         )
         return
 
-    # html_text сохраняет форматирование (жирный, курсив, ссылки) как HTML
+    # html_text сохраняет форматирование (жирный, курсив, ссылки, премиум-эмодзи) как HTML
+    previous = content.custom_text(config.db_path, key)
     content.set_text(config.db_path, key, message.html_text)
     await state.clear()
     await message.answer("Сохранено. Вот как теперь выглядит:")
-    await message.answer(_item_text(config, key), reply_markup=admin_item_kb(key))
+    try:
+        await message.answer(_item_text(config, key), reply_markup=admin_item_kb(key))
+    except TelegramBadRequest as e:
+        # Telegram не принял разметку: возвращаем прежний текст, чтобы бот не сломался
+        log.warning("Telegram не принял новый текст %s: %s", key, e)
+        if previous is None:
+            content.reset_text(config.db_path, key)
+        else:
+            content.set_text(config.db_path, key, previous)
+        await message.answer(
+            "Telegram не принял этот текст, поэтому я оставил прежний. "
+            "Попробуй убрать необычное форматирование или эмодзи и пришли снова.",
+            reply_markup=admin_item_kb(key),
+        )
