@@ -11,7 +11,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, FSInputFile, Message
 
-from .. import db, render, services, texts
+from .. import content, db, render, services, texts
 from ..config import Config
 from ..forms import (
     FORMS,
@@ -37,7 +37,10 @@ QUESTION_MAX_LEN = 1500
 # Картинки, которые идут вместе с текстом анкеты. Чтобы поменять картинку,
 # замени файл в папке assets (имя файла оставь прежним).
 ASSETS = Path(__file__).resolve().parent.parent.parent / "assets"
-FORM_BANNERS = {"emoji": ASSETS / "emoji_banner.jpg"}
+FORM_BANNERS = {
+    "stickers": ASSETS / "stickers_banner.jpg",
+    "emoji": ASSETS / "emoji_banner.jpg",
+}
 
 
 class Form(StatesGroup):
@@ -46,17 +49,23 @@ class Form(StatesGroup):
     question = State()    # ждём текст вопроса
 
 
+def _kb(user_id: int, config: Config):
+    """Клавиатура меню; у владелиц есть дополнительная кнопка «Админ-панель»."""
+    return main_reply_kb(is_owner=user_id in config.owner_ids)
+
+
 async def send_welcome(message: Message, config: Config) -> None:
     """Приветствие с фото (если владелица его загрузила) и постоянной клавиатурой."""
-    kb = main_reply_kb()
+    kb = _kb(message.from_user.id, config)
+    welcome = content.get_text(config.db_path, "welcome")
     photo = db.get_setting(config.db_path, "welcome_photo")
     if photo:
         try:
-            await message.answer_photo(photo, caption=texts.WELCOME, reply_markup=kb)
+            await message.answer_photo(photo, caption=welcome, reply_markup=kb)
             return
         except TelegramAPIError as e:
             log.warning("Не удалось отправить приветственное фото: %s", e)
-    await message.answer(texts.WELCOME, reply_markup=kb)
+    await message.answer(welcome, reply_markup=kb)
 
 
 # ---------------------------------------------------------------- меню
@@ -68,9 +77,9 @@ async def start(message: Message, state: FSMContext, config: Config) -> None:
 
 
 @router.message(Command("cancel"), StateFilter(Form.answering, Form.photos, Form.question))
-async def cancel_form(message: Message, state: FSMContext) -> None:
+async def cancel_form(message: Message, state: FSMContext, config: Config) -> None:
     await state.clear()
-    await message.answer(texts.CANCELLED, reply_markup=main_reply_kb())
+    await message.answer(texts.CANCELLED, reply_markup=_kb(message.from_user.id, config))
 
 
 @router.message(F.text == texts.BTN_RELOAD)
@@ -80,19 +89,19 @@ async def reload_menu(message: Message, state: FSMContext, config: Config) -> No
 
 
 @router.callback_query(F.data == "menu:cancel")
-async def cancel_inline(call: CallbackQuery, state: FSMContext) -> None:
+async def cancel_inline(call: CallbackQuery, state: FSMContext, config: Config) -> None:
     await state.clear()
     try:
         await call.message.edit_text(texts.CANCELLED)
     except TelegramBadRequest:
-        await call.message.answer(texts.CANCELLED, reply_markup=main_reply_kb())
+        await call.message.answer(texts.CANCELLED, reply_markup=_kb(call.from_user.id, config))
     await call.answer()
 
 
 @router.message(F.text == texts.BTN_PAID)
 async def paid_services(message: Message, state: FSMContext, config: Config) -> None:
     await state.clear()
-    text = texts.PAID_SERVICES
+    text = content.get_text(config.db_path, "paid")
     if config.owner_usernames:
         contacts = ", ".join(f"@{u}" for u in config.owner_usernames)
         text += f"\n\nДля заказа пиши: {contacts}"
@@ -118,7 +127,7 @@ async def request_question(message: Message, state: FSMContext, config: Config) 
 
 async def _send_intro(message: Message, config: Config, kind: str) -> None:
     """Текст анкеты; если для неё есть картинка — отправляется вместе с картинкой."""
-    intro = FORMS[kind].intro
+    intro = content.get_text(config.db_path, f"{kind}_intro")
     banner = FORM_BANNERS.get(kind)
     if banner and banner.exists():
         st = banner.stat()
@@ -373,6 +382,9 @@ async def _finish(
 
 
 @fallback_router.message(StateFilter(None))
-async def fallback(message: Message) -> None:
+async def fallback(message: Message, config: Config) -> None:
     # Заодно возвращаем клавиатуру тем, у кого она пропала
-    await message.answer(texts.WELCOME, reply_markup=main_reply_kb())
+    await message.answer(
+        content.get_text(config.db_path, "welcome"),
+        reply_markup=_kb(message.from_user.id, config),
+    )

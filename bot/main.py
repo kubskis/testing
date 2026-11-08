@@ -10,7 +10,7 @@ from aiogram.types import BotCommand, BotCommandScopeChat, MenuButtonCommands
 
 from . import db
 from .config import load_config
-from .handlers import owner, user
+from .handlers import admin, owner, user
 
 
 def build_dispatcher(config) -> Dispatcher:
@@ -22,6 +22,7 @@ def build_dispatcher(config) -> Dispatcher:
     # Порядок важен: сначала меню/анкеты, потом панель владелиц, в конце — запасной хендлер
     dp.include_router(user.router)
     dp.include_router(owner.router)
+    dp.include_router(admin.router)
     dp.include_router(user.fallback_router)
     return dp
 
@@ -40,6 +41,7 @@ async def setup_menu(bot: Bot, config) -> None:
                 [
                     BotCommand(command="start", description="Открыть меню"),
                     BotCommand(command="queue", description="Открытые заявки"),
+                    BotCommand(command="admin", description="Админ-панель: изменить тексты"),
                     BotCommand(command="setwelcome", description="Фото для приветствия"),
                     BotCommand(command="cancel", description="Отменить текущее действие"),
                 ],

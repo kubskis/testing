@@ -5,7 +5,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
 )
 
-from . import texts
+from . import content, texts
 from .forms import Step
 
 # Цвета кнопок в Telegram: "primary" — синий, "success" — зелёный,
@@ -21,20 +21,36 @@ def _markup(*rows: list[InlineKeyboardButton]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[list(r) for r in rows])
 
 
-def main_reply_kb() -> ReplyKeyboardMarkup:
+def main_reply_kb(is_owner: bool = False) -> ReplyKeyboardMarkup:
     """Постоянная клавиатура под полем ввода. Чтобы добавить кнопку, допиши её в ряд
     (по две в ряд) и добавь обработчик по тексту в bot/handlers/user.py."""
     def b(text: str, style: str | None = None) -> KeyboardButton:
         return KeyboardButton(text=text, style=style)
 
+    rows = [
+        [b(texts.BTN_STICKERS, PRIMARY), b(texts.BTN_EMOJI, SUCCESS)],
+        [b(texts.BTN_PAID, DANGER), b(texts.BTN_QUESTION, PRIMARY)],
+        [b(texts.BTN_RELOAD)],
+    ]
+    if is_owner:
+        rows.append([b(texts.BTN_ADMIN, SUCCESS)])
     return ReplyKeyboardMarkup(
-        keyboard=[
-            [b(texts.BTN_STICKERS, PRIMARY), b(texts.BTN_EMOJI, SUCCESS)],
-            [b(texts.BTN_PAID, DANGER), b(texts.BTN_QUESTION, PRIMARY)],
-            [b(texts.BTN_RELOAD)],
-        ],
+        keyboard=rows,
         resize_keyboard=True,
         is_persistent=True,
+    )
+
+
+def admin_menu_kb() -> InlineKeyboardMarkup:
+    """Панель владелиц: какой текст менять."""
+    return _markup(*[[_btn(item.title, f"a:sel:{key}", PRIMARY)] for key, item in content.ITEMS.items()])
+
+
+def admin_item_kb(key: str) -> InlineKeyboardMarkup:
+    return _markup(
+        [_btn("Изменить текст", f"a:edit:{key}", SUCCESS)],
+        [_btn("Вернуть стандартный", f"a:reset:{key}", DANGER)],
+        [_btn("Назад", "a:menu")],
     )
 
 
