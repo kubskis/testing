@@ -10,9 +10,12 @@ from aiogram.types import CallbackQuery, Message
 
 from .. import content, texts
 from ..config import Config
+from ..filters import IsOwner
 from ..keyboards import admin_item_kb, admin_menu_kb
 
 router = Router()
+# Все сообщения этого роутера — только от владелиц (остальным он просто не отвечает)
+router.message.filter(IsOwner())
 log = logging.getLogger(__name__)
 
 PANEL_TEXT = (

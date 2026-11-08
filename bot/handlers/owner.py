@@ -10,8 +10,11 @@ from aiogram.types import CallbackQuery, Message
 
 from .. import db, render, services, texts
 from ..config import Config
+from ..filters import IsOwner
 
 router = Router()
+# Все сообщения этого роутера — только от владелиц (остальным он просто не отвечает)
+router.message.filter(IsOwner())
 log = logging.getLogger(__name__)
 
 NO_REASON = {"-", "—", "–"}
