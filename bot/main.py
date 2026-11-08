@@ -11,6 +11,7 @@ from aiogram.types import BotCommand, BotCommandScopeChat, MenuButtonCommands
 from . import db
 from .config import load_config
 from .handlers import admin, owner, user
+from .middlewares import SubscriptionMiddleware
 
 
 def build_dispatcher(config) -> Dispatcher:
@@ -18,6 +19,11 @@ def build_dispatcher(config) -> Dispatcher:
     # (иначе при отправке альбома из 3 фото часть фото могла бы потеряться).
     dp = Dispatcher(storage=MemoryStorage(), events_isolation=SimpleEventIsolation())
     dp["config"] = config  # доступен в хендлерах как аргумент `config`
+
+    # Без подписки на канал бот не работает (владелицы пропускаются)
+    subscription = SubscriptionMiddleware(config)
+    dp.message.outer_middleware(subscription)
+    dp.callback_query.outer_middleware(subscription)
 
     # Порядок важен: сначала меню/анкеты, потом панель владелиц, в конце — запасной хендлер
     dp.include_router(user.router)

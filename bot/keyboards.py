@@ -54,6 +54,14 @@ def admin_item_kb(key: str) -> InlineKeyboardMarkup:
     )
 
 
+def subscribe_kb(url: str) -> InlineKeyboardMarkup:
+    rows = []
+    if url:
+        rows.append([InlineKeyboardButton(text="Подписаться на канал", url=url, style=PRIMARY)])
+    rows.append([_btn("Я подписался", "sub:check", SUCCESS)])
+    return _markup(*rows)
+
+
 def cancel_menu() -> InlineKeyboardMarkup:
     return _markup([_btn("Отмена", "menu:cancel", DANGER)])
 

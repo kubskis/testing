@@ -54,9 +54,9 @@ def _kb(user_id: int, config: Config):
     return main_reply_kb(is_owner=user_id in config.owner_ids)
 
 
-async def send_welcome(message: Message, config: Config) -> None:
+async def send_welcome(message: Message, config: Config, user_id: int | None = None) -> None:
     """Приветствие с фото (если владелица его загрузила) и постоянной клавиатурой."""
-    kb = _kb(message.from_user.id, config)
+    kb = _kb(user_id or message.from_user.id, config)
     welcome = content.get_text(config.db_path, "welcome")
     photo = db.get_setting(config.db_path, "welcome_photo")
     if photo:
@@ -74,6 +74,18 @@ async def send_welcome(message: Message, config: Config) -> None:
 async def start(message: Message, state: FSMContext, config: Config) -> None:
     await state.clear()
     await send_welcome(message, config)
+
+
+@router.callback_query(F.data == "sub:check")
+async def subscription_checked(call: CallbackQuery, state: FSMContext, config: Config) -> None:
+    """Сюда доходят только подписанные: остальных останавливает проверка подписки."""
+    await state.clear()
+    await call.answer("Подписка подтверждена")
+    try:
+        await call.message.edit_text(texts.SUB_OK)
+    except TelegramBadRequest:
+        pass
+    await send_welcome(call.message, config, user_id=call.from_user.id)
 
 
 @router.message(Command("cancel"), StateFilter(Form.answering, Form.photos, Form.question))
@@ -145,6 +157,25 @@ async def _send_intro(message: Message, config: Config, kind: str) -> None:
             if cached:
                 db.set_setting(config.db_path, key, None)
     await message.answer(intro)
+
+
+async def _menu_redirect(message: Message, state: FSMContext, config: Config) -> bool:
+    """Если вместо ответа на вопрос нажата кнопка меню — прерываем анкету и открываем
+    выбранный раздел. Так название кнопки никогда не попадёт в ответ анкеты."""
+    text = message.text
+    if text == texts.BTN_STICKERS:
+        await start_request(message, state, config, "stickers")
+    elif text == texts.BTN_EMOJI:
+        await start_request(message, state, config, "emoji")
+    elif text == texts.BTN_QUESTION:
+        await start_request(message, state, config, "question")
+    elif text == texts.BTN_PAID:
+        await paid_services(message, state, config)
+    elif text == texts.BTN_RELOAD:
+        await reload_menu(message, state, config)
+    else:
+        return False
+    return True
 
 
 async def start_request(
@@ -251,7 +282,9 @@ async def on_skip(call: CallbackQuery, state: FSMContext) -> None:
 
 
 @router.message(Form.answering)
-async def on_answer(message: Message, state: FSMContext) -> None:
+async def on_answer(message: Message, state: FSMContext, config: Config) -> None:
+    if await _menu_redirect(message, state, config):
+        return
     async with _locks[message.from_user.id]:
         data = await state.get_data()
         idx = data.get("idx", 0)
@@ -307,7 +340,9 @@ async def on_photo(message: Message, state: FSMContext) -> None:
 
 
 @router.message(Form.photos)
-async def on_photo_wrong(message: Message) -> None:
+async def on_photo_wrong(message: Message, state: FSMContext, config: Config) -> None:
+    if await _menu_redirect(message, state, config):
+        return
     await message.answer("Пришли фото персонажа (именно как фото, не как файл).")
 
 
@@ -339,6 +374,8 @@ async def submit_form(call: CallbackQuery, state: FSMContext, bot: Bot, config: 
 async def receive_question(
     message: Message, state: FSMContext, bot: Bot, config: Config
 ) -> None:
+    if await _menu_redirect(message, state, config):
+        return
     text = (message.text or "").strip()
     if not text:
         await message.answer("Напиши вопрос текстом.")
@@ -383,8 +420,8 @@ async def _finish(
 
 @fallback_router.message(StateFilter(None))
 async def fallback(message: Message, config: Config) -> None:
-    # Заодно возвращаем клавиатуру тем, у кого она пропала
+    # Человек написал что-то, не выбрав действие. Заодно возвращаем клавиатуру тем,
+    # у кого она пропала.
     await message.answer(
-        content.get_text(config.db_path, "welcome"),
-        reply_markup=_kb(message.from_user.id, config),
+        texts.CHOOSE_ACTION, reply_markup=_kb(message.from_user.id, config)
     )
